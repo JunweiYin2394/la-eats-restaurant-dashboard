@@ -52,7 +52,7 @@ LA Eats investigates **food safety deserts** — census tracts where residents f
 ### 1. Clone or download
 
 ```bash
-git clone https://github.com/your-repo/la-eats.git
+git clone https://github.com/JunweiYin2394/la-eats-restaurant-dashboard.git
 cd la-eats
 ```
 
@@ -178,13 +178,12 @@ la-eats/
 
 ---
 
-## Team
+## Project Portfolio
 
-| Name | Role |
-|---|---|
-| Junwei Yin | |
-| Qingyi Feng | |
-| Ke Cao | |
+**Portfolio maintained by:** Junwei Yin  
+**GitHub:** https://github.com/JunweiYin2394
+
+This project was originally developed as a group project for DSCI 554 at the University of Southern California. This repository presents the project as part of my data analytics and visualization portfolio.
 
 ---
 

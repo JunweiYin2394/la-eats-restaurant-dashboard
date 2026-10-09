@@ -1,0 +1,1603 @@
+<template>
+  <div style="padding:0;flex:1;display:flex;flex-direction:column;">
+    <div style="position:relative;flex:1;">
+      <div id="mapbox-map" style="height:calc(100vh - 56px);width:100%;"></div>
+
+      <!-- Main Control Panel -->
+      <div class="map-controls">
+        <div class="mc-title">
+          <i class="bi bi-map-fill" style="color:var(--orange);margin-right:6px;"></i>
+          LA Food Safety Map
+        </div>
+
+        <!-- View Mode -->
+        <template v-if="showViewMode">
+          <div class="mc-label">View Mode</div>
+          <div class="mc-pills mb-2">
+            <button class="mc-pill" :class="{ active: viewMode === 'markers' }" @click="setViewMode('markers')">
+              <i class="bi bi-geo-alt"></i> Markers
+            </button>
+            <button class="mc-pill" :class="{ active: viewMode === 'reach' }" @click="setViewMode('reach')">
+              <i class="bi bi-grid-3x3"></i> Reachability
+            </button>
+            <button class="mc-pill" :class="{ active: viewMode === 'isochrone' }" @click="setViewMode('isochrone')">
+              <i class="bi bi-bullseye"></i> Isochrone
+            </button>
+          </div>
+        </template>
+
+        <!-- Markers options -->
+        <template v-if="viewMode === 'markers'">
+          <div class="mc-label">Background Grid</div>
+          <div class="mc-pills mb-2">
+            <button class="mc-pill" :class="{ active: !gridVisible }" @click="gridVisible = false; toggleGrid()">Off</button>
+            <button class="mc-pill" :class="{ active: gridVisible }" @click="gridVisible = true; toggleGrid()">On</button>
+          </div>
+          <template v-if="gridVisible">
+            <div class="mc-label">Color by</div>
+            <div class="mc-pills mb-2">
+              <button class="mc-pill" :class="{ active: gridBy === 'avgScore' }" @click="gridBy = 'avgScore'; updateGrid()">Avg Score</button>
+              <button class="mc-pill" :class="{ active: gridBy === 'count' }" @click="gridBy = 'count'; updateGrid()">Density</button>
+            </div>
+          </template>
+        </template>
+
+        <!-- Reachability options -->
+        <template v-if="viewMode === 'reach'">
+          <div class="mc-label">Transport Mode</div>
+          <div class="transport-seg mb-2">
+            <button :class="['seg-btn', { active: transportMode === 'walking' }]"
+              @click="transportMode = 'walking'; updateReach()">
+              <i class="bi bi-person-walking"></i><span>Walk</span>
+            </button>
+            <button :class="['seg-btn', { active: transportMode === 'cycling' }]"
+              @click="transportMode = 'cycling'; updateReach()">
+              <i class="bi bi-bicycle"></i><span>Bike</span>
+            </button>
+            <button :class="['seg-btn', { active: transportMode === 'driving' }]"
+              @click="transportMode = 'driving'; updateReach()">
+              <i class="bi bi-car-front"></i><span>Drive</span>
+            </button>
+          </div>
+          <div class="mc-info-box">
+            <i class="bi bi-info-circle" style="color:var(--orange);"></i>
+            Heat = OSM road-network time to nearest restaurant<br>
+            Click a tract to fetch a live OSRM route
+            <div style="margin-top:5px;padding-top:5px;border-top:1px solid #eee;color:#aaa;">
+              Data: OpenStreetMap · OSRM routing
+            </div>
+          </div>
+          <div class="mc-speed-badge">
+            <i :class="transportIcons[transportMode]"></i>
+            {{ transportLabels[transportMode] }}
+          </div>
+          <div v-if="transportMode === 'driving' && realDriveLoading" class="mc-realdrive-badge">
+            <div class="mc-spinner"></div>
+            <span>Loading real OSRM drive routes… {{ realDriveProgress.done }}/{{ realDriveProgress.total }}</span>
+          </div>
+        </template>
+
+        <!-- Isochrone options -->
+        <template v-if="viewMode === 'isochrone'">
+          <div class="mc-label">Transport Mode</div>
+          <div class="mc-pills mb-2">
+            <button class="mc-pill" :class="{ active: isoTransport === 'walking' }" @click="isoTransport = 'walking'">
+              <i class="bi bi-person-walking"></i> Walk
+            </button>
+            <button class="mc-pill" :class="{ active: isoTransport === 'cycling' }" @click="isoTransport = 'cycling'">
+              <i class="bi bi-bicycle"></i> Bike
+            </button>
+            <button class="mc-pill" :class="{ active: isoTransport === 'driving' }" @click="isoTransport = 'driving'">
+              <i class="bi bi-car-front"></i> Drive
+            </button>
+          </div>
+          <div class="mc-label">Time Rings (min)</div>
+          <div class="mc-pills mb-2">
+            <button class="mc-pill" :class="{ active: isoMinutes === '5,10,15' }" @click="isoMinutes = '5,10,15'">5 / 10 / 15</button>
+            <button class="mc-pill" :class="{ active: isoMinutes === '10,20,30' }" @click="isoMinutes = '10,20,30'">10 / 20 / 30</button>
+          </div>
+          <div class="mc-label">Min Grade</div>
+          <div class="mc-pills mb-2">
+            <button class="mc-pill" :class="{ active: isoMinGrade === 'A' }" @click="isoMinGrade = 'A'; drawIsochroneMarkers()">A only</button>
+            <button class="mc-pill" :class="{ active: isoMinGrade === 'B' }" @click="isoMinGrade = 'B'; drawIsochroneMarkers()">A + B</button>
+          </div>
+          <div class="mc-info-box">
+            <i class="bi bi-cursor-fill" style="color:var(--orange);"></i>
+            Click any restaurant dot to generate isochrone rings showing reachable area
+          </div>
+          <div v-if="isoLoading" class="mc-loading">
+            <div class="mc-spinner"></div> Fetching isochrone…
+          </div>
+          <div v-if="selectedRestaurant" class="mc-selected-rest">
+            <div class="mcr-name">{{ selectedRestaurant.name }}</div>
+            <div class="mcr-sub">Score {{ selectedRestaurant.score }} · Grade {{ selectedRestaurant.grade }}</div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Legend -->
+      <div class="map-legend">
+        <template v-if="viewMode === 'markers'">
+          <div class="leg-title">Grade</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#22a85a;"></span> Grade A</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#f2be1a;"></span> Grade B</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#eb5428;"></span> Grade C</div>
+          <template v-if="gridVisible">
+            <div style="margin-top:8px;font-size:.72rem;color:var(--text-mid);font-weight:600;">
+              Grid: {{ gridBy === 'avgScore' ? 'Avg Score' : 'Density' }}
+            </div>
+            <div class="d-flex align-items-center gap-2 mt-1">
+              <svg width="70" height="8">
+                <defs>
+                  <linearGradient id="grid-leg2" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" :stop-color="gridBy === 'avgScore' ? '#d73027' : '#f7fbff'"/>
+                    <stop offset="100%" :stop-color="gridBy === 'avgScore' ? '#1a9850' : '#084594'"/>
+                  </linearGradient>
+                </defs>
+                <rect x="0" y="0" width="70" height="8" rx="2" fill="url(#grid-leg2)"/>
+              </svg>
+              <span style="font-size:.65rem;">Low → High</span>
+            </div>
+          </template>
+        </template>
+
+        <template v-else-if="viewMode === 'reach'">
+          <div class="leg-title">
+            Travel Time
+            <span class="leg-mode-badge"><i :class="transportIcons[transportMode]"></i></span>
+          </div>
+          <div v-for="row in reachLegendRows" :key="row.label" class="leg-row">
+            <span class="leg-dot" :style="{ background: row.color }"></span> {{ row.label }}
+          </div>
+          <div style="margin-top:8px;font-size:.7rem;color:var(--text-mid);font-weight:600;">Route</div>
+          <div class="leg-row">
+            <span style="display:inline-block;width:22px;border-top:2.5px solid #ff6b35;border-radius:2px;margin-right:6px;"></span>
+            Click a tract → road route
+          </div>
+        </template>
+
+        <template v-else-if="viewMode === 'isochrone'">
+          <div class="leg-title">
+            Isochrone Rings
+            <span class="leg-mode-badge"><i :class="transportIcons[isoTransport]"></i></span>
+          </div>
+          <div class="leg-row"><span class="leg-dot" style="background:#1a9850;opacity:0.6;"></span> {{ isoMinutes.split(',')[0] }} min</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#f2be1a;opacity:0.6;"></span> {{ isoMinutes.split(',')[1] }} min</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#eb5428;opacity:0.6;"></span> {{ isoMinutes.split(',')[2] }} min</div>
+          <div style="margin-top:8px;font-size:.7rem;color:var(--text-mid);font-weight:600;">Restaurants</div>
+          <div class="leg-row"><span class="leg-dot" style="background:#22a85a;border:1.5px solid white;"></span> Grade A</div>
+          <div class="leg-row" v-if="isoMinGrade === 'B'"><span class="leg-dot" style="background:#f2be1a;border:1.5px solid white;"></span> Grade B</div>
+        </template>
+      </div>
+
+      <!-- Bottom stats bar for reachability mode -->
+      <div v-if="viewMode === 'reach'" class="reach-stats-bar">
+        <div class="rsb-item">
+          <i class="bi bi-shop" style="color:var(--orange);"></i>
+          <span>{{ store.filteredData.filter(r => r._lat && r._lon).length.toLocaleString() }} restaurants</span>
+        </div>
+        <div class="rsb-sep"></div>
+        <div class="rsb-item">
+          <i :class="transportIcons[transportMode]" style="color:var(--orange);"></i>
+          <span>{{ transportLabels[transportMode] }}</span>
+        </div>
+        <div class="rsb-sep"></div>
+        <div class="rsb-item">
+          <i class="bi bi-info-circle" style="color:var(--orange);"></i>
+          <span>Click a tract to highlight it on the chart</span>
+        </div>
+        <div class="rsb-sep"></div>
+        <button class="rsb-chart-btn" @click="showGapChart = !showGapChart">
+          <i :class="showGapChart ? 'bi bi-chevron-down' : 'bi bi-graph-up'"></i>
+          {{ showGapChart ? 'Hide Chart' : 'Mobility Gap Chart' }}
+        </button>
+      </div>
+
+      <!-- ── Right-side stack: route info + mode comparison.
+           Wrapped so panels flow naturally with a real gap and scroll if they
+           exceed viewport height (previously absolute-positioned panels overlapped). -->
+      <div v-if="viewMode === 'reach' && (routeInfo || selectedTractCenter)" class="right-panels">
+
+      <!-- ── Route to Nearest Restaurant (top-right) ── -->
+      <div v-if="routeInfo" class="route-panel">
+        <div class="rp-header">
+          <i class="bi bi-geo-alt-fill" style="color:var(--orange);"></i>
+          <div class="rp-header-text">
+            <span>Route to Nearest High-Quality Restaurant</span>
+            <small v-if="selectedTractCenter">(from {{ selectedTractCenter.name }})</small>
+          </div>
+          <button class="rp-close" @click="clearSelection"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <!-- Mini SVG map -->
+        <svg class="rp-map-svg" viewBox="0 0 184 100">
+          <rect width="184" height="100" fill="#f5f2ec" rx="3"/>
+          <line x1="0" :y1="routeInfo.oy" x2="184" :y2="routeInfo.oy" stroke="#e0ddd5" stroke-width="0.8"/>
+          <line :x1="routeInfo.ox" y1="0" :x2="routeInfo.ox" y2="100" stroke="#e0ddd5" stroke-width="0.8"/>
+          <!-- Road route polyline when Mapbox route is available, else straight dashed line -->
+          <polyline v-if="routeInfo.routePoints"
+                    :points="routeInfo.routePoints"
+                    fill="none" stroke="#4361ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.88"/>
+          <line v-else
+                :x1="routeInfo.ox" :y1="routeInfo.oy"
+                :x2="routeInfo.dxSvg" :y2="routeInfo.dySvg"
+                stroke="#4361ee" stroke-width="1.8" stroke-dasharray="5,3" opacity="0.6"/>
+          <circle :cx="routeInfo.ox" :cy="routeInfo.oy" r="5" fill="#4361ee" stroke="white" stroke-width="1.5"/>
+          <circle :cx="routeInfo.dxSvg" :cy="routeInfo.dySvg" r="5" fill="#ff6b35" stroke="white" stroke-width="1.5"/>
+          <text :x="routeInfo.labelX" :y="routeInfo.labelY"
+                font-size="8" fill="#333" font-family="system-ui"
+                :text-anchor="routeInfo.labelAnchor">{{ routeInfo.name.length > 20 ? routeInfo.name.slice(0,20)+'…' : routeInfo.name }}</text>
+        </svg>
+        <!-- Stats -->
+        <div class="rp-info">
+          <div class="rp-info-row">
+            <i class="bi bi-pin-map-fill" style="color:#4361ee;"></i>
+            <span v-if="osrmLoading" style="color:var(--orange);">
+              <span class="mc-spinner" style="display:inline-block;margin-right:5px;"></span>Fetching road route…
+            </span>
+            <span v-else>Route (OSM road network)</span>
+          </div>
+          <div class="rp-info-row"><i class="bi bi-arrows-expand-vertical" style="color:#888;"></i><span>Distance: <strong>{{ routeInfo.distKm }} km</strong></span></div>
+          <div class="rp-info-row">
+            <i class="bi bi-clock" style="color:#888;"></i>
+            <span>
+              🚶 <strong>{{ routeInfo.walkMin }} min</strong> ·
+              🚴 <strong>{{ routeInfo.bikeMin }} min</strong> ·
+              🚗 <strong>{{ routeInfo.driveMin }} min</strong>
+            </span>
+          </div>
+          <div class="rp-info-row"><i class="bi bi-star-fill" style="color:#f2be1a;"></i><span>Score: <strong>{{ routeInfo.score }}</strong> · Grade <strong>{{ routeInfo.grade }}</strong></span></div>
+        </div>
+      </div>
+
+      <!-- ── Mode Comparison (below route panel, in same scroll column) ── -->
+      <div v-if="selectedTractCenter" class="mcomp-panel">
+        <div class="mcomp-hdr">
+          <i class="bi bi-bar-chart-horizontal-fill" style="color:var(--orange);font-size:.8rem;"></i>
+          <span>Mode Comparison</span>
+        </div>
+        <div class="mcomp-sub">Grade A restaurants reachable in 20 min · <em>{{ selectedTractCenter.name }}</em></div>
+        <div v-if="gapLoading || !tractStats" class="mcomp-spin">
+          <div class="mc-spinner"></div><span>Computing…</span>
+        </div>
+        <svg v-else ref="mcompSvg" class="mcomp-svg"></svg>
+      </div>
+
+      </div><!-- /.right-panels -->
+
+      <!-- ── Mobility Gap Chart Panel ── -->
+      <div v-if="showGapChart && viewMode === 'reach'" class="gap-panel">
+        <div class="gap-header">
+          <i class="bi bi-graph-up" style="color:var(--orange);"></i>
+          <span class="gap-title">Mobility Gap by Census Tract — sorted by walking time</span>
+          <span v-if="gapLoading" class="gap-computing">Computing…</span>
+          <button class="gap-close" @click="showGapChart = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="gap-body">
+          <svg ref="chartSvg" class="gap-svg"></svg>
+          <div ref="gapTooltip" class="gap-tooltip"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import * as d3 from 'd3'
+import { useDataStore } from '@/stores/data'
+
+const props = defineProps({
+  mode:         { type: String,  default: 'markers' },
+  showViewMode: { type: Boolean, default: true }
+})
+
+const store = useDataStore()
+const MAPBOX_TOKEN = 'pk.eyJ1IjoicWluZ3lpZmVuZzEyMyIsImEiOiJjbW1zbWNoOGIxb2NhMnRwbDhxY2QxeTNsIn0.PkK_NJX2ijf540PtNeSExw'
+
+let map = null
+let markersLayer = []
+let isochroneMarkers = []
+
+const viewMode      = ref(props.mode)
+const gridVisible   = ref(false)
+const gridBy        = ref('avgScore')
+const gridSize      = ref('medium')
+const transportMode = ref('walking')
+const isoTransport  = ref('walking')
+const isoMinutes    = ref('5,10,15')
+const isoMinGrade   = ref('A')
+const isoLoading    = ref(false)
+const selectedRestaurant = ref(null)
+
+// ── Mobility Gap Chart state ───────────────────────
+const showGapChart    = ref(false)
+const selectedTractId = ref(null)
+const gapData         = ref([])
+const osrmLoading     = ref(false)
+const osrmRouteCoords = ref(null)   // [[lon,lat],...] from Mapbox API for the SVG preview
+let osrmAbortController = null
+const gapLoading      = ref(false)
+const chartSvg        = ref(null)
+const gapTooltip      = ref(null)
+const mcompSvg        = ref(null)
+const selectedTractCenter = ref(null)   // { lon, lat, name } of the clicked tract
+
+// ── Real OSRM drive routes (live-fetched from Mapbox Directions API + localStorage cache) ───
+// Walk/bike still use synthetic geometry; drive replaces synthetic L-shape with the real
+// OSM road-network driving path so freeway topology is visible.
+const REAL_DRIVE_LS_KEY = 'la-eats-real-drive-routes-v1'
+const realDriveLoading  = ref(false)
+const realDriveProgress = ref({ done: 0, total: 0 })
+let realDriveAbort = null
+// Refs to currently-bound reach-layer handlers so removeReach() can detach them.
+// Without this, every updateReach() (e.g. mode switch) stacks a new click handler
+// on top of the old one, so each click toggles selection twice → zero net effect
+// → "Griffith Park can't be clicked in drive mode" bug.
+let reachHandlers = null
+const realDriveRouteCache = new Map()   // key: `${cLon.toFixed(5)},${cLat.toFixed(5)}->${rLon.toFixed(5)},${rLat.toFixed(5)}`
+let realDriveCacheDirty = false
+// Hydrate from localStorage (so subsequent page loads don't re-fetch all routes)
+try {
+  const raw = localStorage.getItem(REAL_DRIVE_LS_KEY)
+  if (raw) {
+    const obj = JSON.parse(raw)
+    for (const k in obj) realDriveRouteCache.set(k, obj[k])
+  }
+} catch (e) { /* ignore: corrupted cache, will be overwritten */ }
+function persistRealDriveCache() {
+  if (!realDriveCacheDirty) return
+  try {
+    const obj = {}
+    for (const [k, v] of realDriveRouteCache) obj[k] = v
+    localStorage.setItem(REAL_DRIVE_LS_KEY, JSON.stringify(obj))
+    realDriveCacheDirty = false
+  } catch (e) { /* localStorage full or disabled */ }
+}
+
+// Walk/bike/drive counts for the selected tract (from gapData once computed)
+const tractStats = computed(() => {
+  if (!selectedTractId.value || !gapData.value.length) return null
+  return gapData.value.find(d => d.GEOID === selectedTractId.value) ?? null
+})
+
+// Straight-line route from selected tract center to the nearest qualifying restaurant
+const routeInfo = computed(() => {
+  if (!selectedTractCenter.value) return null
+  const { lon, lat } = selectedTractCenter.value
+  const targets = getQualifyingRestaurants(store.filteredData.filter(r => r._lat && r._lon))
+  if (!targets.length) return null
+  let minDist = Infinity, nearest = null
+  for (const r of targets) {
+    const dx = (r._lon - lon) * 89, dy = (r._lat - lat) * 111
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d < minDist) { minDist = d; nearest = r }
+  }
+  if (!nearest) return null
+
+  // Determine bounding box — use actual route coords if available for tighter fit
+  const svgW = 184, svgH = 100, pad = 0.25
+  const routeCoords = osrmRouteCoords.value
+  let lonMin, lonMax, latMin, latMax
+  if (routeCoords && routeCoords.length > 1) {
+    lonMin = Math.min(...routeCoords.map(c => c[0]))
+    lonMax = Math.max(...routeCoords.map(c => c[0]))
+    latMin = Math.min(...routeCoords.map(c => c[1]))
+    latMax = Math.max(...routeCoords.map(c => c[1]))
+  } else {
+    lonMin = Math.min(lon, nearest._lon); lonMax = Math.max(lon, nearest._lon)
+    latMin = Math.min(lat, nearest._lat); latMax = Math.max(lat, nearest._lat)
+  }
+  const lonSpan = Math.max(lonMax - lonMin, 0.008)
+  const latSpan = Math.max(latMax - latMin, 0.008)
+  const lonMid  = (lonMin + lonMax) / 2
+  const latMid  = (latMin + latMax) / 2
+  const lonExt  = [lonMid - lonSpan * (0.5 + pad), lonMid + lonSpan * (0.5 + pad)]
+  const latExt  = [latMid - latSpan * (0.5 + pad), latMid + latSpan * (0.5 + pad)]
+  const proj = (lo, la) => [
+    +(((lo - lonExt[0]) / (lonExt[1] - lonExt[0])) * svgW).toFixed(1),
+    +(((1 - (la - latExt[0]) / (latExt[1] - latExt[0])) * svgH)).toFixed(1)
+  ]
+  const [ox, oy]       = proj(lon, lat)
+  const [dxSvg, dySvg] = proj(nearest._lon, nearest._lat)
+  const labelAnchor = dxSvg > svgW * 0.62 ? 'end' : 'start'
+  const labelX      = dxSvg > svgW * 0.62 ? dxSvg - 8 : dxSvg + 8
+  const labelY      = dySvg < 14 ? dySvg + 13 : dySvg - 7
+
+  // Project road route into SVG (road geometry when available, else null → straight line shown)
+  const routePoints = (routeCoords && routeCoords.length > 1)
+    ? routeCoords.map(c => proj(c[0], c[1]).join(',')).join(' ')
+    : null
+
+  // Use pre-computed OSM times from tract properties; fall back to straight-line
+  const tract = tractGeoCache?.features.find(f => f.properties.GEOID === selectedTractId.value)
+  const walkMin  = tract?.properties.walkMin  ?? Math.round(minDist / 5  * 60)
+  const bikeMin  = tract?.properties.bikeMin  ?? Math.round(minDist / 15 * 60)
+  const driveMin = tract?.properties.driveMin ?? Math.round(minDist / 40 * 60)
+  const distKm   = tract?.properties.nearestDist ?? +minDist.toFixed(2)
+
+  return {
+    name:  nearest['FACILITY NAME'],
+    grade: nearest['GRADE'],
+    score: nearest._score,
+    distKm, walkMin, bikeMin, driveMin,
+    ox, oy, dxSvg, dySvg, labelAnchor, labelX, labelY,
+    routePoints
+  }
+})
+
+const transportIcons = {
+  walking: 'bi bi-person-walking',
+  cycling: 'bi bi-bicycle',
+  driving: 'bi bi-car-front'
+}
+const transportLabels = {
+  walking: 'Walking · OSM road network',
+  cycling: 'Cycling · OSM road network',
+  driving: 'Driving · OSM road network'
+}
+const speedKmh = { walking: 5, cycling: 15, driving: 40 }
+
+// Travel time thresholds per mode (minutes) — calibrated for OSM road-network times
+// (walk median ~4 min, bike ~1.4 min, drive ~0.5 min in LA)
+// Drive thresholds are sub-minute on purpose: LA's full driveMin range is 0.1–4.4 min.
+// Coarser thresholds (e.g. [1,2,5,10]) would collapse 99% of tracts into one bucket.
+const modeThresholds = {
+  walking: [4, 8, 15, 30],
+  cycling: [2, 4, 8, 15],
+  driving: [0.5, 1, 2, 3]
+}
+const reachColors = ['#1a9850', '#66bd63', '#fee08b', '#f46d43', '#d73027']
+const MAX_DIST_KM = 4  // cells/routes beyond 4 km are hidden (excludes ocean, mountains)
+
+// Top-10% score + Low Risk qualifying restaurants
+function getQualifyingRestaurants(restaurants) {
+  const scores = restaurants.map(r => r._score).filter(s => s > 0).sort((a, b) => b - a)
+  if (!scores.length) return restaurants
+  const p90 = scores[Math.floor(scores.length * 0.1)] ?? 90
+  const q = restaurants.filter(r => r._score >= p90 && r._riskLevel === 'Low Risk')
+  return q.length ? q : restaurants  // fallback if filter yields nothing
+}
+
+const p90Score = computed(() => {
+  const rests = store.filteredData.filter(r => r._lat && r._lon)
+  const scores = rests.map(r => r._score).filter(s => s > 0).sort((a, b) => b - a)
+  return scores[Math.floor(scores.length * 0.1)] ?? 90
+})
+
+const reachLegendRows = computed(() => {
+  const t = modeThresholds[transportMode.value]
+  return [
+    { color: reachColors[0], label: `< ${t[0]} min` },
+    { color: reachColors[1], label: `${t[0]}–${t[1]} min` },
+    { color: reachColors[2], label: `${t[1]}–${t[2]} min` },
+    { color: reachColors[3], label: `${t[2]}–${t[3]} min` },
+    { color: reachColors[4], label: `> ${t[3]} min` }
+  ]
+})
+
+function getTimeColor(minutes) {
+  const t = modeThresholds[transportMode.value]
+  for (let i = 0; i < t.length; i++) {
+    if (minutes < t[i]) return reachColors[i]
+  }
+  return reachColors[4]
+}
+
+function getTimeColorExpr() {
+  const t = modeThresholds[transportMode.value]
+  return ['interpolate', ['linear'], ['get', 'travelMin'],
+    0, reachColors[0],
+    t[0], reachColors[0],
+    t[1], reachColors[1],
+    t[2], reachColors[2],
+    t[3], reachColors[3],
+    t[3] * 2, reachColors[4]
+  ]
+}
+
+
+// ── Helpers ───────────────────────────────────────
+function gradeColor(grade) {
+  if (grade === 'A') return '#22a85a'
+  if (grade === 'B') return '#f2be1a'
+  return '#eb5428'
+}
+
+async function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return }
+    const s = document.createElement('script')
+    s.src = src; s.onload = resolve; s.onerror = reject
+    document.head.appendChild(s)
+  })
+}
+async function loadLink(href) {
+  if (document.querySelector(`link[href="${href}"]`)) return
+  const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href
+  document.head.appendChild(l)
+}
+
+// ── Markers ───────────────────────────────────────
+function drawMarkers() {
+  if (!map) return
+  clearMarkers()
+  store.filteredData.filter(r => r._lat && r._lon).slice(0, 3000).forEach(r => {
+    const el = document.createElement('div')
+    el.style.cssText = `width:10px;height:10px;border-radius:50%;background:${gradeColor(r['GRADE'])};border:1.5px solid white;cursor:pointer;opacity:0.85;transition:transform .15s;`
+    el.onmouseenter = () => { el.style.transform = 'scale(1.6)' }
+    el.onmouseleave = () => { el.style.transform = 'scale(1)' }
+    const popup = new mapboxgl.Popup({ offset: 10, closeButton: false })
+      .setHTML(`<div style="font-family:system-ui;font-size:13px;">
+        <div style="font-weight:700;margin-bottom:3px;">${r['FACILITY NAME']}</div>
+        <div style="color:#666;">Score: <strong style="color:${gradeColor(r['GRADE'])}">${r['SCORE']}</strong> · Grade ${r['GRADE']}</div>
+        <div style="color:#999;font-size:11px;">${r['FACILITY ADDRESS']}, ${r['FACILITY CITY']}</div>
+      </div>`)
+    const marker = new mapboxgl.Marker(el).setLngLat([r._lon, r._lat]).setPopup(popup).addTo(map)
+    markersLayer.push(marker)
+  })
+}
+function clearMarkers() { markersLayer.forEach(m => m.remove()); markersLayer = [] }
+
+// ── Grid (Census Tract–based) ──────────────────────
+async function updateGrid() {
+  if (!map) return
+  if (map.getLayer('grid-layer')) map.removeLayer('grid-layer')
+  if (map.getSource('grid-source')) map.removeSource('grid-source')
+  if (!gridVisible.value) return
+
+  const data = store.filteredData.filter(r => r._lat && r._lon)
+  if (!data.length) return
+
+  if (!tractGeoCache) {
+    try {
+      const res = await fetch('./data/la_tracts_merged.geojson')
+      tractGeoCache = await res.json()
+    } catch (e) { console.error(e); return }
+  }
+
+  // Assign each restaurant to its nearest tract centroid (skip if > 3 km away)
+  const gridStats = {}
+  for (const f of tractGeoCache.features) {
+    gridStats[f.properties.GEOID] = { scores: [], count: 0, name: f.properties.NAME }
+  }
+  for (const r of data) {
+    let minD2 = Infinity, bestId = null
+    for (const f of tractGeoCache.features) {
+      const dx = (f.properties.lon - r._lon) * 89
+      const dy = (f.properties.lat - r._lat) * 111
+      const d2 = dx * dx + dy * dy
+      if (d2 < minD2) { minD2 = d2; bestId = f.properties.GEOID }
+    }
+    if (bestId && minD2 < 9) {  // 3 km² threshold (sqrt(9)=3 km)
+      gridStats[bestId].scores.push(r._score)
+      gridStats[bestId].count++
+    }
+  }
+
+  const features = tractGeoCache.features
+    .map(f => {
+      const st = gridStats[f.properties.GEOID]
+      if (!st.count) return null
+      const avg = st.scores.reduce((a, b) => a + b, 0) / st.scores.length
+      const value = gridBy.value === 'avgScore' ? avg : st.count
+      return { ...f, properties: { ...f.properties, avgScore: +avg.toFixed(2), count: st.count, value } }
+    })
+    .filter(Boolean)
+
+  if (!features.length) return
+
+  const allVals = features.map(f => f.properties.value)
+  const vMin = Math.min(...allVals), vMax = Math.max(...allVals)
+  const colorStops = gridBy.value === 'avgScore'
+    ? [vMin,'#d73027', vMin+(vMax-vMin)*.25,'#f46d43', vMin+(vMax-vMin)*.5,'#fee08b', vMin+(vMax-vMin)*.75,'#66bd63', vMax,'#1a9850']
+    : [vMin,'#f7fbff', vMin+(vMax-vMin)*.25,'#9ecae1', vMin+(vMax-vMin)*.5,'#4292c6', vMin+(vMax-vMin)*.75,'#2171b5', vMax,'#084594']
+
+  map.addSource('grid-source', { type: 'geojson', data: { type: 'FeatureCollection', features } })
+  map.addLayer({ id:'grid-layer', type:'fill', source:'grid-source',
+    paint: { 'fill-color':['interpolate',['linear'],['get','value'],...colorStops], 'fill-opacity':0.55, 'fill-outline-color':'rgba(255,255,255,0.2)' }
+  }, 'waterway-label')
+  map.on('mouseenter','grid-layer', (e) => {
+    map.getCanvas().style.cursor = 'pointer'
+    const p = e.features[0].properties
+    new mapboxgl.Popup({ closeButton: false, closeOnClick: false }).setLngLat(e.lngLat)
+      .setHTML(`<div style="font-size:13px;font-family:system-ui;">
+        <div style="font-weight:700;margin-bottom:3px;">${p.NAME}</div>
+        <div style="color:#666;">Avg Score: <strong>${p.avgScore}</strong></div>
+        <div style="color:#666;">Inspections: <strong>${p.count}</strong></div>
+      </div>`).addTo(map)
+  })
+  map.on('mouseleave','grid-layer', () => { map.getCanvas().style.cursor = ''; document.querySelectorAll('.mapboxgl-popup').forEach(p => p.remove()) })
+}
+function toggleGrid() {
+  if (gridVisible.value) updateGrid()
+  else { if (map?.getLayer('grid-layer')) map.removeLayer('grid-layer'); if (map?.getSource('grid-source')) map.removeSource('grid-source') }
+}
+
+// ── Reachability helpers ───────────────────────────
+
+// Select target restaurant per mode:
+//   walking → absolute nearest (shortest distance matters most on foot)
+//   cycling → pick from top-3 nearest (vary by tract to simulate bike-lane routing)
+//   driving → pick from top-5 nearest, prefer ones in cardinal directions (simulate road grid)
+function selectTarget(targets, cLon, cLat, mode, tractIdx) {
+  // Always pick the strictly-nearest qualifying restaurant.
+  //
+  // Previously bike/drive used pseudo-random "diversification" hacks
+  // (street-aligned + index hash) so the synthetic L-shaped lines wouldn't
+  // visually collapse onto the same restaurant. With drive mode now using
+  // real OSRM routes, that hack causes the background route and the
+  // click-fetched OSRM route to target DIFFERENT restaurants → two
+  // visibly different paths from the same tract. Unifying on sorted[0]
+  // matches fetchOsrmRoute()'s nearest-target logic so the lines agree.
+  let nearest = null, minD = Infinity
+  for (const r of targets) {
+    const dx = (r._lon - cLon) * 89
+    const dy = (r._lat - cLat) * 111
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d < minD) { minD = d; nearest = r }
+  }
+  return nearest ? { r: nearest, d: minD } : null
+}
+
+// Route geometry per mode:
+//   walking → nearly straight (tiny perpendicular nudge)
+//   cycling → smooth curve (moderate perpendicular offset)
+//   driving → L-shaped turn (simulates following a street grid)
+function makeRouteCoords(cLon, cLat, rLon, rLat, mode, tractIdx) {
+  if (mode === 'walking') {
+    const mx = (cLon + rLon) / 2 + (rLat - cLat) * 0.03
+    const my = (cLat + rLat) / 2 - (rLon - cLon) * 0.03
+    return [[cLon, cLat], [mx, my], [rLon, rLat]]
+  }
+  if (mode === 'cycling') {
+    const mx = (cLon + rLon) / 2 + (rLat - cLat) * 0.13
+    const my = (cLat + rLat) / 2 - (rLon - cLon) * 0.13
+    return [[cLon, cLat], [mx, my], [rLon, rLat]]
+  }
+  // driving: alternate which axis goes first based on tract index
+  return tractIdx % 2 === 0
+    ? [[cLon, cLat], [rLon, cLat], [rLon, rLat]]   // horizontal → vertical
+    : [[cLon, cLat], [cLon, rLat], [rLon, rLat]]   // vertical → horizontal
+}
+
+// Line paint per mode
+function routeLinePaint(mode) {
+  if (mode === 'walking')  return { 'line-color': ['get','color'], 'line-width': 1,   'line-opacity': 0.70, 'line-dasharray': [2, 1.8] }
+  if (mode === 'cycling')  return { 'line-color': ['get','color'], 'line-width': 1.6, 'line-opacity': 0.70 }
+  /* driving */            return { 'line-color': ['get','color'], 'line-width': 2.4, 'line-opacity': 0.75 }
+}
+
+// ── Mobility Gap Chart ─────────────────────────────
+
+// Per-tract travel times; sorted low to high by walking time for X axis.
+function computeGapData() {
+  if (!tractGeoCache || !store.filteredData.length) return
+  gapLoading.value = true
+  const all = store.filteredData.filter(r => r._lat && r._lon)
+  const targets = getQualifyingRestaurants(all)
+  // 20-minute radius² per mode (km²): walk 1.67km, bike 5km, drive 13.3km
+  const walkR2 = 1.67 * 1.67   // 2.79
+  const bikeR2 = 5.0  * 5.0    // 25
+  const driveR2 = 13.3 * 13.3  // 176.89
+  setTimeout(() => {
+    const result = []
+    for (const [idx, feat] of tractGeoCache.features.entries()) {
+      const cLon = feat.properties.lon, cLat = feat.properties.lat
+      let minDist = Infinity
+      let walkCount = 0, bikeCount = 0, driveCount = 0
+      let scoreSum = 0, scoreN = 0
+      for (const r of targets) {
+        const dx = (r._lon - cLon) * 89, dy = (r._lat - cLat) * 111
+        const d2 = dx * dx + dy * dy
+        const dist = Math.sqrt(d2)
+        if (dist < minDist) minDist = dist
+        if (d2 <= driveR2) {
+          driveCount++
+          scoreSum += r._score; scoreN++
+          if (d2 <= bikeR2) {
+            bikeCount++
+            if (d2 <= walkR2) walkCount++
+          }
+        }
+      }
+      if (!Number.isFinite(minDist)) continue
+      // Skip water/remote tracts (sentinel 999 or > 50 min walk)
+      const preWalk = feat.properties.walkMin ?? 999
+      if (preWalk <= 0 || preWalk >= 35) continue
+      const walkCov = driveCount > 0 ? (walkCount / driveCount) * 100 : 0
+      // Use straight-line distance to nearest QUALIFYING restaurant (policy metric)
+      const walkMin  = +(minDist / speedKmh.walking * 60).toFixed(1)
+      const bikeMin  = +(minDist / speedKmh.cycling * 60).toFixed(1)
+      const driveMin = +(minDist / speedKmh.driving * 60).toFixed(1)
+      result.push({
+        GEOID: feat.properties.GEOID,
+        name: feat.properties.NAME,
+        lon: cLon,
+        lat: cLat,
+        distKm: +minDist.toFixed(2),
+        walkMin, bikeMin, driveMin,
+        walkCount, bikeCount, driveCount,
+        walkCov: +walkCov.toFixed(1),
+        avgScore: scoreN > 0 ? +(scoreSum / scoreN).toFixed(1) : 0,
+        originalIdx: idx
+      })
+    }
+    result.sort((a, b) => a.walkMin - b.walkMin)
+    gapData.value = result.map((d, i) => ({ ...d, rank: i + 1 }))
+    gapLoading.value = false
+  }, 0)
+}
+
+// Highlight a tract on the map (fill + thick stroke border), or clear with null
+function highlightTract(geoid) {
+  if (!map || !map.getLayer('highlight-layer')) return
+  const f = geoid ? ['==', ['get', 'GEOID'], geoid] : ['==', ['get', 'GEOID'], '']
+  map.setFilter('highlight-layer', f)
+  if (map.getLayer('highlight-line')) map.setFilter('highlight-line', f)
+}
+
+function clearSelection() {
+  selectedTractId.value = null
+  selectedTractCenter.value = null
+  highlightTract(null)
+  if (osrmAbortController) { osrmAbortController.abort(); osrmAbortController = null }
+  if (map?.getLayer('osrm-layer')) map.removeLayer('osrm-layer')
+  if (map?.getSource('osrm-source')) map.removeSource('osrm-source')
+  osrmRouteCoords.value = null
+  if (showGapChart.value) nextTick(drawGapChart)
+}
+
+async function fetchOsrmRoute(cLon, cLat) {
+  if (osrmAbortController) { osrmAbortController.abort(); osrmAbortController = null }
+  if (map?.getLayer('osrm-layer')) map.removeLayer('osrm-layer')
+  if (map?.getSource('osrm-source')) map.removeSource('osrm-source')
+  osrmRouteCoords.value = null
+
+  const restaurants = store.filteredData.filter(r => r._lat && r._lon)
+  const targets = getQualifyingRestaurants(restaurants)
+  if (!targets.length) return
+
+  let minDist = Infinity, nearest = null
+  for (const r of targets) {
+    const dx = (r._lon - cLon) * 89, dy = (r._lat - cLat) * 111
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d < minDist) { minDist = d; nearest = r }
+  }
+  if (!nearest || minDist > 20) return
+
+  osrmLoading.value = true
+  osrmAbortController = new AbortController()
+  const timeoutId = setTimeout(() => osrmAbortController?.abort(), 10000)
+  // Use Mapbox Directions API — reliable, no rate-limit issues, token already present
+  const profile = { walking: 'walking', cycling: 'cycling', driving: 'driving' }[transportMode.value]
+  const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${cLon.toFixed(6)},${cLat.toFixed(6)};${nearest._lon.toFixed(6)},${nearest._lat.toFixed(6)}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`
+  try {
+    const res = await fetch(url, { signal: osrmAbortController.signal })
+    const data = await res.json()
+    if (data.routes?.[0] && map) {
+      const coords = data.routes[0].geometry.coordinates
+      osrmRouteCoords.value = coords   // drives the SVG preview
+      map.addSource('osrm-source', {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }
+      })
+      map.addLayer({
+        id: 'osrm-layer', type: 'line', source: 'osrm-source',
+        paint: { 'line-color': '#ff6b35', 'line-width': 4, 'line-opacity': 0.92, 'line-cap': 'round', 'line-join': 'round' }
+      })
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') console.warn('Route fetch failed:', e.message)
+  }
+  clearTimeout(timeoutId)
+  osrmLoading.value = false
+}
+
+function drawMcompChart() {
+  const svgEl = mcompSvg.value
+  if (!svgEl || !tractStats.value) return
+  const t = tractStats.value
+  const items = [
+    { label: 'Walk',  icon: '🚶', count: t.walkCount,  color: '#52b788' },
+    { label: 'Bike',  icon: '🚴', count: t.bikeCount,  color: '#f77f00' },
+    { label: 'Drive', icon: '🚗', count: t.driveCount, color: '#4361ee' }
+  ]
+  const W = 178, H = 96, ml = 48, mr = 28, mt = 6, mb = 6
+  const w = W - ml - mr, h = H - mt - mb
+  d3.select(svgEl).selectAll('*').remove()
+  const svg = d3.select(svgEl).attr('width', W).attr('height', H)
+  const g   = svg.append('g').attr('transform', `translate(${ml},${mt})`)
+  const maxVal = Math.max(d3.max(items, d => d.count), 1)
+  const xSc = d3.scaleLinear().domain([0, maxVal]).range([0, w])
+  const ySc = d3.scaleBand().domain(items.map(d => d.label)).range([0, h]).padding(0.30)
+  // Bars
+  g.selectAll('rect').data(items).join('rect')
+    .attr('x', 0).attr('y', d => ySc(d.label))
+    .attr('width', d => Math.max(xSc(d.count), 3))
+    .attr('height', ySc.bandwidth())
+    .attr('fill', d => d.color).attr('rx', 3).attr('opacity', 0.88)
+  // Count labels
+  g.selectAll('.cnt').data(items).join('text').attr('class', 'cnt')
+    .attr('x', d => xSc(d.count) + 5)
+    .attr('y', d => ySc(d.label) + ySc.bandwidth() / 2 + 4)
+    .attr('font-size', 11).attr('fill', '#444').attr('font-weight', '600')
+    .text(d => d.count)
+  // Y labels
+  g.selectAll('.ylbl').data(items).join('text').attr('class', 'ylbl')
+    .attr('x', -4).attr('y', d => ySc(d.label) + ySc.bandwidth() / 2 + 4)
+    .attr('text-anchor', 'end').attr('font-size', 10).attr('fill', '#888')
+    .text(d => d.icon + ' ' + d.label)
+}
+
+function drawGapChart() {
+  const svgEl = chartSvg.value
+  if (!svgEl || !gapData.value.length) return
+  const data = gapData.value
+
+  d3.select(svgEl).selectAll('*').remove()
+  const rect = svgEl.getBoundingClientRect()
+  const W = rect.width || 800, H = rect.height || 250
+  const margin = { top: 30, right: 34, bottom: 48, left: 58 }
+  const w = W - margin.left - margin.right
+  const h = H - margin.top - margin.bottom
+
+  const svg = d3.select(svgEl).attr('width', W).attr('height', H)
+  const g   = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`)
+
+  const xDomainMax = Math.max(2, data.length)
+  const xScale = d3.scaleLinear().domain([1, xDomainMax]).range([0, w])
+  const maxMin = d3.max(data, d => Math.max(d.walkMin, d.bikeMin, d.driveMin)) || 60
+  const yMax = Math.max(60, Math.ceil(maxMin * 1.15 / 10) * 10)
+  const yScale = d3.scaleLog().domain([0.5, yMax]).range([h, 0])
+  const yTicks = [1, 2, 5, 10, 20, 30, 60, 120, 240].filter(t => t <= yMax)
+  const thresholdY = yScale(30)
+  const series = [
+    { key: 'walkMin', label: 'Walk', color: '#d94f30', icon: 'Walking' },
+    { key: 'bikeMin', label: 'Bike', color: '#2878b8', icon: 'Bike' },
+    { key: 'driveMin', label: 'Drive', color: '#2f9e61', icon: 'Drive' }
+  ]
+
+  // Grid
+  g.append('g').selectAll('line').data(yTicks).join('line')
+    .attr('x1', 0).attr('x2', w)
+    .attr('y1', d => yScale(d)).attr('y2', d => yScale(d))
+    .attr('stroke', d => d === 30 ? '#d94f30' : '#eeeeee')
+    .attr('stroke-width', d => d === 30 ? 1.4 : 1)
+    .attr('stroke-dasharray', d => d === 30 ? '5,4' : null)
+
+  // 30+ minute unreachable area
+  g.append('rect')
+    .attr('x', 0).attr('y', 0).attr('width', w).attr('height', Math.max(0, thresholdY))
+    .attr('fill', '#d94f30').attr('opacity', 0.08)
+  g.append('text')
+    .attr('x', w - 4).attr('y', Math.max(11, thresholdY - 7))
+    .attr('text-anchor', 'end').attr('font-size', 10).attr('font-weight', 700)
+    .attr('fill', '#c5482c').text('30+ min unreachable zone')
+  g.append('text')
+    .attr('x', w - 4).attr('y', thresholdY + 13)
+    .attr('text-anchor', 'end').attr('font-size', 10).attr('fill', '#c5482c')
+    .text('30 min threshold')
+
+  // Axes — X: only a few key ticks
+  const keyTicks = [500, 1000, 1500, 2000].filter(t => t < data.length)
+  g.append('g').attr('transform', `translate(0,${h})`)
+    .call(d3.axisBottom(xScale).tickValues(keyTicks).tickFormat(d => String(d)))
+    .call(ax => ax.select('.domain').attr('stroke', '#ddd'))
+    .call(ax => ax.selectAll('.tick text').attr('fill', '#999').attr('font-size', 10))
+  g.append('g').call(d3.axisLeft(yScale).tickValues(yTicks).tickFormat(d => d + 'm'))
+    .call(ax => ax.select('.domain').remove())
+    .call(ax => ax.selectAll('.tick text').attr('fill', '#aaa').attr('font-size', 10))
+
+  // Axis labels
+  g.append('text').attr('x', w / 2).attr('y', h + 38).attr('text-anchor', 'middle')
+    .attr('font-size', 9.5).attr('fill', '#bbb')
+    .text('Census tracts sorted by walking time to nearest qualifying restaurant')
+  g.append('text').attr('transform', 'rotate(-90)').attr('x', -h / 2).attr('y', -46)
+    .attr('text-anchor', 'middle').attr('font-size', 9.5).attr('fill', '#aaa')
+    .text('Travel time in minutes (log scale)')
+
+  const line = d3.line()
+    .x(d => xScale(d.rank))
+    .y(d => yScale(Math.max(0.5, d.value)))
+    .curve(d3.curveMonotoneX)
+
+  series.forEach(s => {
+    const values = data.map(d => ({ rank: d.rank, value: d[s.key] }))
+    g.append('path')
+      .datum(values)
+      .attr('fill', 'none')
+      .attr('stroke', s.color)
+      .attr('stroke-width', s.key === 'walkMin' ? 2.5 : 2)
+      .attr('stroke-linejoin', 'round')
+      .attr('stroke-linecap', 'round')
+      .attr('opacity', s.key === 'walkMin' ? 0.95 : 0.88)
+      .attr('d', line)
+  })
+
+  // ── Policy annotation: where walk line crosses 30-min threshold ──
+  const crossoverIdx = data.findIndex(d => d.walkMin >= 30)
+  if (crossoverIdx > 0) {
+    const crossoverRank = data[crossoverIdx].rank
+    const pctUnreachable = Math.round((data.length - crossoverIdx) / data.length * 100)
+    const cx = xScale(crossoverRank)
+    const cy = yScale(30)
+    // Vertical drop-line from threshold to X-axis
+    g.append('line').attr('x1', cx).attr('x2', cx).attr('y1', cy).attr('y2', h)
+      .attr('stroke', '#c5482c').attr('stroke-width', 1.2)
+      .attr('stroke-dasharray', '3,2').attr('opacity', 0.65)
+    // Circle marker at intersection
+    g.append('circle').attr('cx', cx).attr('cy', cy)
+      .attr('r', 5.5).attr('fill', '#fff').attr('stroke', '#d94f30').attr('stroke-width', 2)
+    // Callout text — anchor left if near right edge
+    const anchor = cx > w * 0.55 ? 'end' : 'start'
+    const lx = cx > w * 0.55 ? cx - 10 : cx + 10
+    g.append('text').attr('x', lx).attr('y', cy - 13)
+      .attr('text-anchor', anchor).attr('font-size', 11).attr('font-weight', 700).attr('fill', '#c5482c')
+      .text(`${pctUnreachable}% of tracts`)
+    g.append('text').attr('x', lx).attr('y', cy + 1)
+      .attr('text-anchor', anchor).attr('font-size', 10).attr('fill', '#c5482c')
+      .text('unreachable on foot (> 30 min)')
+  }
+
+  // Legend
+  const leg = g.append('g').attr('transform', `translate(${Math.max(0, w - 218)}, -20)`)
+  series.forEach((s, i) => {
+    const item = leg.append('g').attr('transform', `translate(${i * 72}, 0)`)
+    item.append('line').attr('x1', 0).attr('x2', 18).attr('y1', 8).attr('y2', 8)
+      .attr('stroke', s.color).attr('stroke-width', 2.5).attr('stroke-linecap', 'round')
+    item.append('text').attr('x', 23).attr('y', 11).attr('font-size', 10)
+      .attr('fill', '#777').attr('font-weight', 700).text(s.label)
+  })
+
+  // Selected tract: large point on the line that matches the current transport
+  // mode (walk → red line, bike → blue line, drive → green line), plus a
+  // vertical locator. X position stays sorted by walk time (per axis label).
+  if (selectedTractId.value) {
+    const tract = data.find(d => d.GEOID === selectedTractId.value)
+    if (tract) {
+      const modeKey = { walking: 'walkMin', cycling: 'bikeMin', driving: 'driveMin' }[transportMode.value] || 'walkMin'
+      const dotColor = series.find(s => s.key === modeKey)?.color || '#d94f30'
+      const cx = xScale(tract.rank), cy = yScale(Math.max(0.5, tract[modeKey]))
+      g.append('line').attr('x1', cx).attr('x2', cx).attr('y1', 0).attr('y2', h)
+        .attr('stroke', dotColor).attr('stroke-width', 1).attr('stroke-dasharray', '3,3')
+        .attr('opacity', 0.65)
+      g.append('circle').attr('cx', cx).attr('cy', cy)
+        .attr('r', 10).attr('fill', dotColor).attr('stroke', 'white').attr('stroke-width', 2.5)
+      const anchor = cx > w * 0.8 ? 'end' : 'start'
+      const lx = cx > w * 0.8 ? cx - 13 : cx + 13
+      g.append('text').attr('x', lx).attr('y', Math.max(12, cy - 14))
+        .attr('text-anchor', anchor).attr('font-size', 9).attr('fill', dotColor).attr('font-weight', '600')
+        .text(tract.name)
+      g.append('text').attr('x', lx).attr('y', Math.max(25, cy + 1))
+        .attr('text-anchor', anchor).attr('font-size', 8.5).attr('fill', dotColor)
+        .text(`walk ${tract.walkMin}m · bike ${tract.bikeMin}m · drive ${tract.driveMin}m`)
+    }
+  }
+
+  // Invisible per-tract hit zones: hover tooltip + click links with map.
+  const tipEl = gapTooltip.value
+  const hitW = Math.max(6, w / data.length)
+  g.selectAll('.tract-hit').data(data).join('rect')
+    .attr('class', 'tract-hit')
+    .attr('x', d => xScale(d.rank) - hitW / 2)
+    .attr('y', 0)
+    .attr('width', hitW)
+    .attr('height', h)
+    .attr('fill', 'transparent')
+    .attr('cursor', 'pointer')
+    .on('mouseenter', (_, d) => {
+      if (!tipEl) return
+      const cx = margin.left + xScale(d.rank)
+      const cy = margin.top + yScale(Math.max(0.5, d.walkMin))
+      tipEl.style.display = 'block'
+      tipEl.style.left = (Math.min(cx + 12, W - 190)) + 'px'
+      tipEl.style.top = (Math.max(cy - 56, 4)) + 'px'
+      tipEl.innerHTML = `<strong style="font-size:11px;">${d.name}</strong>
+        <div style="font-size:10px;color:#888;margin-bottom:2px;">Rank by walk time: <b>${d.rank}</b> / ${data.length}</div>
+        <div style="font-size:10px;color:#d94f30;">Walking: <b>${d.walkMin} min</b></div>
+        <div style="font-size:10px;color:#2878b8;">Biking: <b>${d.bikeMin} min</b></div>
+        <div style="font-size:10px;color:#2f9e61;">Driving: <b>${d.driveMin} min</b></div>`
+    })
+    .on('mouseleave', () => { if (tipEl) tipEl.style.display = 'none' })
+    .on('click', (event, d) => {
+      event.stopPropagation()
+      if (tipEl) tipEl.style.display = 'none'
+      if (selectedTractId.value === d.GEOID) {
+        clearSelection()
+      } else {
+        selectedTractId.value = d.GEOID
+        selectedTractCenter.value = { lon: d.lon, lat: d.lat, name: d.name }
+        highlightTract(d.GEOID)
+        if (map) map.flyTo({ center: [d.lon, d.lat], zoom: 12, duration: 800 })
+        fetchOsrmRoute(d.lon, d.lat)
+      }
+      drawGapChart()
+    })
+}
+
+// ── Real OSRM drive fetch helpers ─────────────────
+// Fetch one driving route from Mapbox Directions API.
+// Returns array of [lon,lat] coords following the OSM road network, or null on failure.
+async function fetchRealDriveRoute(cLon, cLat, rLon, rLat, signal) {
+  const key = `${cLon.toFixed(5)},${cLat.toFixed(5)}->${rLon.toFixed(5)},${rLat.toFixed(5)}`
+  if (realDriveRouteCache.has(key)) return realDriveRouteCache.get(key)
+  const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${cLon.toFixed(6)},${cLat.toFixed(6)};${rLon.toFixed(6)},${rLat.toFixed(6)}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`
+  try {
+    const res = await fetch(url, { signal })
+    if (!res.ok) return null
+    const data = await res.json()
+    const coords = data.routes?.[0]?.geometry?.coordinates ?? null
+    if (coords) {
+      // Round to 5 decimals to keep localStorage size manageable (~700 bytes/route)
+      const rounded = coords.map(c => [+c[0].toFixed(5), +c[1].toFixed(5)])
+      realDriveRouteCache.set(key, rounded)
+      realDriveCacheDirty = true
+      return rounded
+    }
+    return null
+  } catch (e) { return null }
+}
+
+// Concurrency-limited fetch of real drive routes for an array of {start,end,feat} items.
+// Updates routeFeatures geometry in place and refreshes the map source incrementally.
+async function fetchRealDriveRoutesBatched(items, signal) {
+  const limit = 6
+  const total = items.length
+  realDriveProgress.value = { done: 0, total }
+  realDriveLoading.value = true
+
+  let cursor = 0
+  let lastFlush = Date.now()
+  let lastPersist = Date.now()
+  const flushInterval = 600
+  const persistInterval = 5000   // write to localStorage every 5 s during fetch
+
+  const flushSource = () => {
+    if (!map || signal.aborted) return
+    const src = map.getSource('routes-source')
+    if (src) src.setData({ type: 'FeatureCollection', features: items.map(it => it.feat) })
+  }
+
+  const workers = Array.from({ length: limit }, async () => {
+    while (!signal.aborted) {
+      const i = cursor++
+      if (i >= total) break
+      const it = items[i]
+      const coords = await fetchRealDriveRoute(it.start[0], it.start[1], it.end[0], it.end[1], signal)
+      if (coords && coords.length >= 2) it.feat.geometry.coordinates = coords
+      realDriveProgress.value = { done: cursor < total ? cursor : total, total }
+      const now = Date.now()
+      if (now - lastFlush > flushInterval) { lastFlush = now; flushSource() }
+      if (now - lastPersist > persistInterval) { lastPersist = now; persistRealDriveCache() }
+    }
+  })
+  await Promise.all(workers)
+  flushSource()
+  persistRealDriveCache()
+  realDriveLoading.value = false
+}
+
+// ── Reachability ──────────────────────────────────
+let tractGeoCache = null  // cache so switching modes doesn't re-fetch
+
+async function updateReach() {
+  if (!map) return
+  removeReach()
+
+  const restaurants = store.filteredData.filter(r => r._lat && r._lon)
+  if (!restaurants.length) return
+
+  const targets = getQualifyingRestaurants(restaurants)
+  const speed   = speedKmh[transportMode.value]
+
+  // Load census tract GeoJSON with pre-computed OSM times (cached after first fetch)
+  if (!tractGeoCache) {
+    try {
+      const res = await fetch('./data/la_tracts_merged.geojson')
+      tractGeoCache = await res.json()
+    } catch (e) {
+      console.error('Failed to load la_tracts_merged.geojson', e)
+      return
+    }
+  }
+
+  const mode = transportMode.value
+  const tractFeatures = []
+  const routeFeatures = []
+  const routeFeatureItems = []   // parallel array: { start:[lon,lat], end:[lon,lat], feat } for real-drive fetching
+
+  tractGeoCache.features.forEach((feat, tractIdx) => {
+    const cLon = feat.properties.lon
+    const cLat = feat.properties.lat
+
+    // Heatmap: use pre-computed OSM road-network time if available
+    // Hide non-land tracts (walkMin=999 sentinel) and remote areas with no restaurant data
+    const timeKey = { walking: 'walkMin', cycling: 'bikeMin', driving: 'driveMin' }[mode]
+    const preTime = feat.properties[timeKey]
+    const walkTime = feat.properties.walkMin ?? 999
+    const inRange = walkTime > 0 && walkTime < 35   // exclude water tracts (999) and remote mountain/desert areas (>35 min walk)
+    // Use >= 0 (not > 0) so tracts with driveMin = 0.0 (≈72 tracts whose centroid is
+    // essentially on top of a top-10% restaurant) stay clickable. 999 is the sentinel
+    // for "no data", so we keep that hard exclusion.
+    const travelMin = (inRange && preTime != null && preTime >= 0 && preTime < 999) ? +preTime.toFixed(1) : -1
+
+    // Route selection still uses straight-line distance for picking target restaurant
+    let minDist = Infinity
+    for (const r of targets) {
+      const dx = (r._lon - cLon) * 89
+      const dy = (r._lat - cLat) * 111
+      const d = Math.sqrt(dx * dx + dy * dy)
+      if (d < minDist) minDist = d
+    }
+
+    tractFeatures.push({
+      ...feat,
+      properties: { ...feat.properties, travelMin, distKm: +minDist.toFixed(2) }
+    })
+
+    // Background route lines (estimated geometry, coloured by travel time)
+    // Drive mode: only draw lines for "relatively isolated" tracts (driveMin > 1 min) so
+    // the freeway-burden pattern stays visible instead of being drowned by 1800+ short
+    // surface-street paths from already-fast tracts.
+    const minLineTime = mode === 'driving' ? 1 : 0
+    if (travelMin > minLineTime && minDist < MAX_DIST_KM * 2) {
+      const hit = selectTarget(targets, cLon, cLat, mode, tractIdx)
+      if (hit && hit.d < MAX_DIST_KM * 2) {
+        const rLon = hit.r._lon, rLat = hit.r._lat
+        const routeTravelMin = +(hit.d / speed * 60).toFixed(1)
+        const color = getTimeColor(routeTravelMin)
+        const coords = makeRouteCoords(cLon, cLat, rLon, rLat, mode, tractIdx)
+        const f = {
+          type: 'Feature',
+          properties: { color, travelMin: routeTravelMin },
+          geometry: { type: 'LineString', coordinates: coords }
+        }
+        routeFeatures.push(f)
+        routeFeatureItems.push({ start: [cLon, cLat], end: [rLon, rLat], feat: f })
+      }
+    }
+  })
+
+  // Fill layer — transparent for out-of-range tracts
+  map.addSource('reach-source', { type: 'geojson', data: { type: 'FeatureCollection', features: tractFeatures } })
+  map.addLayer({
+    id: 'reach-layer', type: 'fill', source: 'reach-source',
+    paint: {
+      'fill-color': ['case', ['<', ['get', 'travelMin'], 0], 'rgba(0,0,0,0)', getTimeColorExpr()],
+      'fill-opacity': ['case', ['<', ['get', 'travelMin'], 0], 0, 0.7],
+      'fill-outline-color': 'rgba(255,255,255,0.18)'
+    }
+  }, 'waterway-label')
+
+  const onReachMouseEnter = (e) => {
+    const p = e.features[0].properties
+    if (p.travelMin < 0) return
+    map.getCanvas().style.cursor = 'pointer'
+    const icon = { walking: '🚶', cycling: '🚴', driving: '🚗' }[transportMode.value]
+    new mapboxgl.Popup({ closeButton: false, closeOnClick: false }).setLngLat(e.lngLat)
+      .setHTML(`<div style="font-size:13px;font-family:system-ui;">
+        <div style="font-weight:700;margin-bottom:4px;">${p.NAME}</div>
+        <div style="color:#555;">${icon} Travel time: <strong>~${p.travelMin} min</strong></div>
+        <div style="color:#888;font-size:11px;">Distance: ${p.distKm} km · top-10% low-risk restaurant</div>
+      </div>`).addTo(map)
+  }
+  const onReachMouseLeave = () => {
+    map.getCanvas().style.cursor = ''
+    document.querySelectorAll('.mapboxgl-popup').forEach(el => el.remove())
+  }
+  map.on('mouseenter', 'reach-layer', onReachMouseEnter)
+  map.on('mouseleave', 'reach-layer', onReachMouseLeave)
+
+  // Drive mode: replace synthetic geometry with cached real-OSRM coords up-front.
+  // Anything not in cache will keep its synthetic coords and get filled in by the
+  // background fetch below.
+  if (mode === 'driving' && routeFeatureItems.length) {
+    for (const it of routeFeatureItems) {
+      const key = `${it.start[0].toFixed(5)},${it.start[1].toFixed(5)}->${it.end[0].toFixed(5)},${it.end[1].toFixed(5)}`
+      const cached = realDriveRouteCache.get(key)
+      if (cached && cached.length >= 2) it.feat.geometry.coordinates = cached
+    }
+  }
+
+  // Background route lines
+  if (routeFeatures.length) {
+    map.addSource('routes-source', { type: 'geojson', data: { type: 'FeatureCollection', features: routeFeatures } })
+    map.addLayer({ id: 'routes-layer', type: 'line', source: 'routes-source', paint: routeLinePaint(mode) })
+  }
+
+  // ── Drive mode: live-fetch REAL OSRM routes from Mapbox Directions API.
+  // Walk/bike still use synthetic geometry. Cancellable via realDriveAbort.
+  // Routes already in localStorage cache were applied above; this fills in misses.
+  if (mode === 'driving' && routeFeatureItems.length) {
+    const missing = routeFeatureItems.filter(it => {
+      const key = `${it.start[0].toFixed(5)},${it.start[1].toFixed(5)}->${it.end[0].toFixed(5)},${it.end[1].toFixed(5)}`
+      return !realDriveRouteCache.has(key)
+    })
+    if (missing.length) {
+      if (realDriveAbort) realDriveAbort.abort()
+      realDriveAbort = new AbortController()
+      fetchRealDriveRoutesBatched(missing, realDriveAbort.signal).catch(() => {})
+    } else {
+      realDriveLoading.value = false
+    }
+  } else {
+    realDriveLoading.value = false
+  }
+
+  // Highlight: semi-transparent fill for the selected tract.
+  // Cyan instead of orange so it doesn't blend with the orange/red route lines and choropleth.
+  map.addLayer({
+    id: 'highlight-layer', type: 'fill', source: 'reach-source',
+    paint: { 'fill-color': 'rgba(0, 212, 255, 0.20)' },
+    filter: ['==', ['get', 'GEOID'], '']
+  })
+  // Highlight: thick electric-cyan stroke border on top
+  map.addLayer({
+    id: 'highlight-line', type: 'line', source: 'reach-source',
+    paint: { 'line-color': '#00d4ff', 'line-width': 4, 'line-opacity': 0.98 },
+    filter: ['==', ['get', 'GEOID'], '']
+  })
+
+  // Click a tract → highlight + populate right-side panels + fetch OSRM route
+  const onReachClick = (e) => {
+    if (!e.features?.length) return
+    const p = e.features[0].properties
+    if (p.travelMin < 0) return
+    if (selectedTractId.value === p.GEOID) {
+      clearSelection()
+    } else {
+      selectedTractId.value = p.GEOID
+      const feat = tractGeoCache?.features.find(f => f.properties.GEOID === p.GEOID)
+      selectedTractCenter.value = feat
+        ? { lon: feat.properties.lon, lat: feat.properties.lat, name: feat.properties.NAME }
+        : null
+      highlightTract(p.GEOID)
+      if (!gapData.value.length && tractGeoCache) computeGapData()
+      if (selectedTractCenter.value) {
+        fetchOsrmRoute(selectedTractCenter.value.lon, selectedTractCenter.value.lat)
+      }
+    }
+    if (showGapChart.value) nextTick(drawGapChart)
+  }
+  map.on('click', 'reach-layer', onReachClick)
+  // Stash handler refs so removeReach() can detach them on the next mode switch
+  reachHandlers = { mouseenter: onReachMouseEnter, mouseleave: onReachMouseLeave, click: onReachClick }
+
+  // Re-apply highlight if a tract was selected before this mode switch
+  if (selectedTractId.value) {
+    highlightTract(selectedTractId.value)
+  }
+
+  // Compute chart data once tracts are loaded
+  if (!gapData.value.length) computeGapData()
+}
+
+// ── Isochrone ─────────────────────────────────────
+function drawIsochroneMarkers() {
+  if (!map) return
+  clearIsochroneMarkers()
+  const gradeFilter = isoMinGrade.value === 'A'
+    ? (r) => r['GRADE'] === 'A'
+    : (r) => r['GRADE'] === 'A' || r['GRADE'] === 'B'
+  store.filteredData.filter(r => r._lat && r._lon && gradeFilter(r)).slice(0, 2000).forEach(r => {
+    const el = document.createElement('div')
+    el.style.cssText = `width:11px;height:11px;border-radius:50%;background:${gradeColor(r['GRADE'])};border:2px solid white;cursor:pointer;opacity:0.9;box-shadow:0 1px 4px rgba(0,0,0,0.3);transition:transform .15s;`
+    el.title = `Click to generate isochrone: ${r['FACILITY NAME']}`
+    el.onmouseenter = () => { el.style.transform = 'scale(1.6)' }
+    el.onmouseleave = () => { el.style.transform = 'scale(1)' }
+    el.onclick = () => fetchIsochrone(r._lon, r._lat, r['FACILITY NAME'], r['SCORE'], r['GRADE'])
+    isochroneMarkers.push(new mapboxgl.Marker(el).setLngLat([r._lon, r._lat]).addTo(map))
+  })
+}
+function clearIsochroneMarkers() { isochroneMarkers.forEach(m => m.remove()); isochroneMarkers = [] }
+
+async function fetchIsochrone(lon, lat, name, score, grade) {
+  if (!map) return
+  isoLoading.value = true
+  selectedRestaurant.value = { name, score, grade }
+  ;['iso-layer-0','iso-layer-1','iso-layer-2'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id) })
+  ;['iso-source-0','iso-source-1','iso-source-2'].forEach(id => { if (map.getSource(id)) map.removeSource(id) })
+  const minutes = isoMinutes.value.split(',').map(Number)
+  const profile = isoTransport.value
+  const colors = ['1a9850', 'f2be1a', 'eb5428']
+  try {
+    const url = `https://api.mapbox.com/isochrone/v1/mapbox/${profile}/${lon},${lat}?contours_minutes=${minutes.join(',')}&polygons=true&denoise=1&access_token=${MAPBOX_TOKEN}`
+    const res = await fetch(url)
+    const data = await res.json()
+    if (!data.features?.length) { isoLoading.value = false; return }
+    const sorted = [...data.features].sort((a, b) => (b.properties.contour || 0) - (a.properties.contour || 0))
+    sorted.forEach((feature, i) => {
+      const color = '#' + colors[Math.min(i, 2)]
+      map.addSource(`iso-source-${i}`, { type:'geojson', data: feature })
+      map.addLayer({ id:`iso-layer-${i}`, type:'fill', source:`iso-source-${i}`,
+        paint: { 'fill-color': color, 'fill-opacity': 0.22, 'fill-outline-color': color }
+      }, 'waterway-label')
+    })
+    map.flyTo({ center: [lon, lat], zoom: 13, duration: 900 })
+    new mapboxgl.Popup({ offset: 12 }).setLngLat([lon, lat])
+      .setHTML(`<div style="font-family:system-ui;font-size:13px;">
+        <div style="font-weight:700;margin-bottom:3px;">${name}</div>
+        <div style="color:#666;">Score: <strong style="color:${gradeColor(grade)}">${score}</strong> · Grade ${grade}</div>
+        <div style="margin-top:6px;font-size:11px;color:#888;">Rings: ${minutes.join(' / ')} min by ${profile}</div>
+      </div>`).addTo(map)
+  } catch (err) { console.error('Isochrone fetch failed', err) }
+  isoLoading.value = false
+}
+
+function removeReach() {
+  // Detach previously-bound layer handlers BEFORE removing the layer.
+  // Mapbox layer-scoped listeners persist across removeLayer/addLayer with the
+  // same id, so without this each updateReach() stacks an extra click handler.
+  if (reachHandlers && map) {
+    map.off('click', 'reach-layer', reachHandlers.click)
+    map.off('mouseenter', 'reach-layer', reachHandlers.mouseenter)
+    map.off('mouseleave', 'reach-layer', reachHandlers.mouseleave)
+    reachHandlers = null
+  }
+  ;['highlight-line', 'highlight-layer', 'osrm-layer', 'routes-layer', 'reach-layer'].forEach(id => { if (map?.getLayer(id)) map.removeLayer(id) })
+  ;['reach-source', 'routes-source', 'osrm-source'].forEach(id => { if (map?.getSource(id)) map.removeSource(id) })
+  if (osrmAbortController) { osrmAbortController.abort(); osrmAbortController = null }
+  if (realDriveAbort) { realDriveAbort.abort(); realDriveAbort = null }
+  realDriveLoading.value = false
+  realDriveProgress.value = { done: 0, total: 0 }
+  persistRealDriveCache()
+}
+function removeGrid()  { if (map?.getLayer('grid-layer'))  map.removeLayer('grid-layer');  if (map?.getSource('grid-source'))  map.removeSource('grid-source') }
+function clearIso() {
+  ;['iso-layer-0','iso-layer-1','iso-layer-2'].forEach(id => { if (map?.getLayer(id)) map.removeLayer(id) })
+  ;['iso-source-0','iso-source-1','iso-source-2'].forEach(id => { if (map?.getSource(id)) map.removeSource(id) })
+  clearIsochroneMarkers()
+  selectedRestaurant.value = null
+}
+
+function setViewMode(mode) {
+  viewMode.value = mode
+  removeGrid(); removeReach(); clearIso(); clearMarkers()
+  gridVisible.value = false
+  if (mode === 'markers') drawMarkers()
+  else if (mode === 'reach') updateReach()
+  else if (mode === 'isochrone') drawIsochroneMarkers()
+}
+
+onMounted(async () => {
+  await loadLink('https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css')
+  await loadScript('https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js')
+  mapboxgl.accessToken = MAPBOX_TOKEN
+  map = new mapboxgl.Map({ container: 'mapbox-map', style: 'mapbox://styles/mapbox/light-v11', center: [-118.24, 34.05], zoom: 10 })
+  map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
+  map.on('load', () => {
+    if (props.mode === 'reach') updateReach()
+    else if (props.mode === 'isochrone') drawIsochroneMarkers()
+    else drawMarkers()
+  })
+})
+
+// When route switches between map/map-reach/map-iso, props.mode changes
+watch(() => props.mode, (newMode) => {
+  if (map && map.loaded()) setViewMode(newMode)
+})
+
+watch(() => store.filteredData, () => {
+  if (!map || !map.loaded()) return
+  gapData.value = []
+  if (viewMode.value === 'markers') { drawMarkers(); if (gridVisible.value) updateGrid() }
+  else if (viewMode.value === 'reach') updateReach()
+  else if (viewMode.value === 'isochrone') drawIsochroneMarkers()
+})
+
+// Show chart: compute data if needed, then draw
+watch(showGapChart, async (val) => {
+  if (val) {
+    if (!gapData.value.length && tractGeoCache) computeGapData()
+    await nextTick()
+    drawGapChart()
+  }
+})
+// When per-tract data is ready, redraw chart
+watch(gapData, async () => {
+  if (showGapChart.value) { await nextTick(); drawGapChart() }
+})
+// Switching transport mode should also move the selected-tract dot to the
+// matching line (walk → red, bike → blue, drive → green).
+watch(transportMode, async () => {
+  if (showGapChart.value && gapData.value.length) { await nextTick(); drawGapChart() }
+})
+// Redraw gap chart when selected tract changes
+watch(selectedTractId, () => {
+  if (showGapChart.value && gapData.value.length) nextTick(drawGapChart)
+})
+// Redraw mode comparison whenever tractStats becomes available or changes
+watch(tractStats, async (val) => {
+  if (val) { await nextTick(); drawMcompChart() }
+})
+
+onUnmounted(() => {
+  if (realDriveAbort) { realDriveAbort.abort(); realDriveAbort = null }
+  if (osrmAbortController) { osrmAbortController.abort(); osrmAbortController = null }
+  persistRealDriveCache()
+  if (map) { map.remove(); map = null }
+})
+</script>
+
+<style scoped>
+/* --orange is not defined in global :root, so define it here */
+:root { --orange: #e67e22; }
+
+.map-controls {
+  position: absolute; top: 16px; left: 16px; background: white;
+  border-radius: 14px; padding: 14px 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.13); min-width: 260px; z-index: 10;
+  max-height: calc(100vh - 220px); overflow-y: auto;
+}
+.mc-title { font-weight: 700; font-size: .9rem; color: var(--text-dark); margin-bottom: 12px; display: flex; align-items: center; }
+.mc-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-light); margin-bottom: 5px; margin-top: 10px; }
+.mc-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+.mc-pill {
+  padding: 5px 10px; border-radius: 20px; border: 1px solid var(--border);
+  background: var(--bg); font-size: .74rem; cursor: pointer; color: var(--text-mid);
+  transition: all .15s; display: flex; align-items: center; gap: 4px;
+}
+.mc-pill:hover { border-color: var(--orange); color: var(--orange); }
+.mc-pill.active { background: var(--orange); border-color: var(--orange); color: white; font-weight: 600; }
+
+/* Transport mode segment control — 3 equal buttons, always full width */
+.transport-seg {
+  display: flex; width: 100%;
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+}
+.seg-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  gap: 4px; padding: 6px 4px; font-size: .74rem; cursor: pointer;
+  background: white; border: none; border-right: 1px solid var(--border);
+  color: var(--text-mid); transition: all .13s;
+}
+.seg-btn:last-child { border-right: none; }
+.seg-btn:hover { background: #fff5f0; color: #e67e22; }
+.seg-btn.active { background: #e67e22; color: white; font-weight: 600; }
+.mc-info-box {
+  margin-top: 8px; padding: 8px 10px; background: var(--accent-bg);
+  border-radius: 8px; font-size: .72rem; line-height: 1.8; color: var(--text-mid);
+}
+.mc-speed-badge {
+  margin-top: 8px; display: flex; align-items: center; gap: 6px;
+  font-size: .72rem; color: var(--text-light); padding-top: 8px; border-top: 1px solid var(--border);
+}
+.mc-loading { display: flex; align-items: center; gap: 8px; font-size: .75rem; color: var(--orange); margin-top: 10px; }
+.mc-realdrive-badge {
+  margin-top: 8px; display: flex; align-items: center; gap: 8px;
+  font-size: .7rem; color: var(--orange); padding: 6px 8px;
+  background: #fff8f5; border: 1px solid #f0c0b0; border-radius: 6px;
+}
+.mc-spinner { width: 14px; height: 14px; border: 2px solid #f0c0b0; border-top-color: var(--orange); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.mc-selected-rest { margin-top: 10px; padding: 8px 10px; background: #fff8f5; border: 1px solid #f0c0b0; border-radius: 8px; }
+.mcr-name { font-size: .78rem; font-weight: 700; color: var(--text-dark); }
+.mcr-sub { font-size: .7rem; color: var(--text-mid); margin-top: 2px; }
+.map-legend {
+  position: absolute; bottom: 40px; left: 16px; background: white;
+  border-radius: 12px; padding: 12px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+  font-size: .76rem; z-index: 10; min-width: 140px;
+}
+.leg-title { font-weight: 700; font-size: .78rem; color: var(--text-dark); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.leg-mode-badge { background: var(--accent-bg); border-radius: 6px; padding: 1px 6px; font-size: .74rem; }
+.leg-row { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+.leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.reach-stats-bar {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: white; border-radius: 20px; padding: 8px 20px;
+  box-shadow: 0 2px 14px rgba(0,0,0,0.12); display: flex; align-items: center;
+  gap: 14px; font-size: .78rem; color: var(--text-mid); z-index: 10; white-space: nowrap;
+}
+.rsb-item { display: flex; align-items: center; gap: 6px; }
+.rsb-sep { width: 1px; height: 16px; background: var(--border); }
+.mb-2 { margin-bottom: 8px; }
+.mt-2 { margin-top: 8px; }
+
+/* ── Stats-bar chart toggle button ── */
+.rsb-chart-btn {
+  display: flex; align-items: center; gap: 5px;
+  background: white; border: 1px solid var(--orange); border-radius: 16px;
+  padding: 4px 12px; font-size: .78rem; cursor: pointer; color: var(--orange);
+  font-weight: 600; transition: all .15s; white-space: nowrap;
+}
+.rsb-chart-btn:hover { background: var(--orange); color: white; }
+
+/* ── Mobility Gap Chart Panel ── */
+.gap-panel {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 15;
+  background: white; border-top: 2px solid var(--border);
+  box-shadow: 0 -6px 24px rgba(0,0,0,0.10);
+}
+.gap-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: #fafafa;
+}
+.gap-title { font-weight: 700; font-size: .82rem; color: var(--text-dark); flex: 1; }
+.gap-computing { font-size: .7rem; color: var(--orange); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 0.5; } to { opacity: 1; } }
+.gap-body { position: relative; padding: 4px 16px 8px; }
+.gap-svg { width: 100%; height: 250px; display: block; }
+.gap-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-light); padding: 2px 4px; font-size: 1rem; line-height: 1;
+}
+.gap-close:hover { color: var(--text-dark); }
+.gap-tooltip {
+  position: absolute; pointer-events: none; display: none;
+  background: white; border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 12px; line-height: 1.7;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.10); z-index: 20;
+}
+
+/* ── Right-side panel stack (route info + mode comparison) ──
+   Replaces the previous absolute-positioned-each layout that caused panels
+   to overlap when the route panel's content was tall. The wrapper is bounded
+   by viewport height so combined content can scroll instead of being clipped. */
+.right-panels {
+  position: absolute; top: 16px; right: 16px; z-index: 10;
+  display: flex; flex-direction: column; gap: 12px;
+  width: 240px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  /* Lets map clicks pass through gaps; children re-enable pointer events */
+  pointer-events: none;
+  /* Hide native scrollbar visually but still allow scroll */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.25) transparent;
+}
+.right-panels > * { pointer-events: auto; }
+.right-panels::-webkit-scrollbar { width: 6px; }
+.right-panels::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.22); border-radius: 3px; }
+
+/* ── Route to Nearest Restaurant panel ── */
+.route-panel {
+  background: white; border-radius: 14px; padding: 12px 14px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.13); width: 100%; box-sizing: border-box;
+}
+.rp-header {
+  display: flex; align-items: center; gap: 6px;
+  font-size: .78rem; font-weight: 700; color: var(--text-dark); margin-bottom: 10px;
+}
+.rp-header span { flex: 1; }
+.rp-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-light); padding: 0 2px; font-size: .8rem; line-height: 1;
+}
+.rp-close:hover { color: var(--text-dark); }
+.rp-diagram { display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; }
+.rp-node { display: flex; align-items: center; gap: 8px; font-size: .72rem; color: var(--text-mid); }
+.rp-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 2px solid white; }
+.rp-edge { display: flex; align-items: center; gap: 8px; padding-left: 3px; margin: 4px 0; }
+.rp-vline {
+  width: 4px; height: 24px; flex-shrink: 0;
+  background: repeating-linear-gradient(to bottom, #ccc 0, #ccc 4px, transparent 4px, transparent 8px);
+}
+.rp-dist-tag {
+  font-size: .68rem; font-weight: 600; color: var(--text-light);
+  background: var(--accent-bg); padding: 2px 7px; border-radius: 8px;
+}
+.rp-rest-name { font-weight: 600; color: var(--text-dark); font-size: .72rem; }
+.rp-divider { height: 1px; background: var(--border); margin: 8px 0; }
+.rp-rows { display: flex; flex-direction: column; gap: 6px; }
+.rp-row { display: flex; align-items: center; gap: 7px; font-size: .72rem; color: var(--text-mid); }
+.rp-row i { width: 14px; text-align: center; flex-shrink: 0; }
+.rp-bar-bg { flex: 1; height: 6px; background: var(--accent-bg); border-radius: 3px; overflow: hidden; }
+.rp-bar-fill { height: 100%; border-radius: 3px; transition: width .45s ease; }
+.rp-time-val { width: 44px; text-align: right; font-weight: 600; }
+.rp-time-val small { font-weight: 400; font-size: .62rem; margin-left: 1px; color: var(--text-light); }
+
+/* ── Mode Comparison panel ── */
+.mcomp-panel {
+  background: white; border-radius: 14px; padding: 12px 14px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.13); width: 100%; box-sizing: border-box;
+}
+.mcomp-hdr {
+  display: flex; align-items: center; gap: 6px;
+  font-size: .78rem; font-weight: 700; color: var(--text-dark); margin-bottom: 3px;
+}
+.mcomp-sub { font-size: .66rem; color: var(--text-light); margin-bottom: 6px; }
+.mcomp-sub em { font-style: normal; font-weight: 600; color: var(--text-mid); }
+.mcomp-svg { display: block; overflow: visible; }
+.mcomp-spin { display: flex; align-items: center; gap: 8px; font-size: .74rem; color: var(--orange); padding: 8px 0; }
+</style>

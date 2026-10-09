@@ -182,9 +182,3 @@ la-eats/
 
 **Portfolio maintained by:** Junwei Yin  
 **GitHub:** https://github.com/JunweiYin2394
-
-This project was originally developed as a group project for DSCI 554 at the University of Southern California. This repository presents the project as part of my data analytics and visualization portfolio.
-
----
-
-USC · DSCI 554 · Spring 2026 · LA County Open Health Data
